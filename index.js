@@ -12,6 +12,10 @@ const io = new Server(server, { cors: { origin: '*' } });
 
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
+app.get('/', (req, res) => {
+  res.sendFile(__dirname + '/public/index.html');
+});
 
 // PostgreSQL connection (Supabase) using DATABASE_URL
 const pool = new Pool({
@@ -234,5 +238,5 @@ io.on('connection', (socket) => {
     }
   });
 });
-
-server.listen(5000, () => console.log('Server running on port 5000'));
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Task Management Platform</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.21.4/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js"></script>
+  <script src="https://unpkg.com/react-beautiful-dnd@13.1.1/dist/react-beautiful-dnd.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+    const { DragDropContext, Droppable, Draggable } = window.ReactBeautifulDnd;
+
+    const App = () => {
+      const [user, setUser] = useState(null);
+      const [tasks, setTasks] = useState([]);
+      const [users, setUsers] = useState([]);
+      const [teams, setTeams] = useState([]);
+      const [notifications, setNotifications] = useState([]);
+      const [comments, setComments] = useState({});
+      const [username, setUsername] = useState('');
+      const [password, setPassword] = useState('');
+      const [newTask, setNewTask] = useState({ title: '', description: '', due_date: '', status: 'To Do', assigned_to: '', team_id: '' });
+      const [editTask, setEditTask] = useState(null);
+      const [commentInput, setCommentInput] = useState('');
+      const [selectedTaskId, setSelectedTaskId] = useState(null);
+
+      const socket = io('http://localhost:5000');
+
+      useEffect(() => {
+        const token = localStorage.getItem('token');
+        if (token) {
+          fetch('http://localhost:5000/api/validate-token', {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+            .then((res) => res.json())
+            .then((data) => {
+              if (data.username) {
+                setUser({ username: data.username });
+                fetchTasks();
+                fetchTeams();
+              } else {
+                localStorage.removeItem('token');
+              }
+            })
+            .catch(() => localStorage.removeItem('token'));
+        }
+
+        socket.on('taskUpdate', (task) => {
+          setTasks((prev) => {
+            if (task.deleted) return prev.filter((t) => t.id !== task.id);
+            const existingIndex = prev.findIndex((t) => t.id === task.id);
+            if (existingIndex >= 0) {
+              return prev.map((t) => (t.id === task.id ? task : t));
+            }
+            return [...prev, task];
+          });
+        });
+        socket.on('notification', (notification) => {
+          setNotifications((prev) => [...prev, notification]);
+          setTimeout(() => setNotifications((prev) => prev.filter((n) => n.id !== notification.id)), 3000);
+        });
+        socket.on('newComment', (comment) => {
+          setComments((prev) => {
+            const taskComments = prev[comment.task_id] || [];
+            if (taskComments.some((c) => c.id === comment.id)) return prev;
+            return {
+              ...prev,
+              [comment.task_id]: [...taskComments, comment],
+            };
+          });
+          setNotifications((prev) => [...prev, { id: comment.id, message: 'New comment added' }]);
+          setTimeout(() => setNotifications((prev) => prev.filter((n) => n.id !== comment.id)), 3000);
+        });
+        return () => socket.disconnect();
+      }, []);
+
+      const login = async () => {
+        try {
+          const res = await fetch('http://localhost:5000/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+          });
+          const data = await res.json();
+          if (data.token) {
+            localStorage.setItem('token', data.token);
+            setUser({ username });
+            fetchTasks();
+            fetchTeams();
+          } else {
+            setNotifications([{ id: 'error', message: 'Login failed' }]);
+            setTimeout(() => setNotifications([]), 3000);
+          }
+        } catch (err) {
+          setNotifications([{ id: 'error', message: 'Server error' }]);
+          setTimeout(() => setNotifications([]), 3000);
+        }
+      };
+
+      const fetchTasks = async () => {
+        try {
+          const res = await fetch('http://localhost:5000/api/tasks', {
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+          });
+          const data = await res.json();
+          setTasks(data);
+        } catch (err) {
+          setNotifications([{ id: 'error', message: 'Failed to fetch tasks' }]);
+          setTimeout(() => setNotifications([]), 3000);
+        }
+      };
+
+      const fetchUsers = async (team_id) => {
+        try {
+          const url = team_id ? `http://localhost:5000/api/users?team_id=${team_id}` : 'http://localhost:5000/api/users';
+          const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+          });
+          const data = await res.json();
+          setUsers(data);
+        } catch (err) {
+          setNotifications([{ id: 'error', message: 'Failed to fetch users' }]);
+          setTimeout(() => setNotifications([]), 3000);
+        }
+      };
+
+      const fetchTeams = async () => {
+        try {
+          const res = await fetch('http://localhost:5000/api/teams', {
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+          });
+          const data = await res.json();
+          setTeams(data);
+        } catch (err) {
+          setNotifications([{ id: 'error', message: 'Failed to fetch teams' }]);
+          setTimeout(() => setNotifications([]), 3000);
+        }
+      };
+
+      const fetchComments = async (taskId) => {
+        try {
+          const res = await fetch(`http://localhost:5000/api/comments?task_id=${taskId}`, {
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+          });
+          const data = await res.json();
+          setComments((prev) => ({ ...prev, [taskId]: data }));
+        } catch (err) {
+          setNotifications([{ id: 'error', message: 'Failed to fetch comments' }]);
+          setTimeout(() => setNotifications([]), 3000);
+        }
+      };
+
+      const addTask = async () => {
+        try {
+          const res = await fetch('http://localhost:5000/api/tasks', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${localStorage.getItem('token')}`,
+            },
+            body: JSON.stringify(newTask),
+          });
+          const data = await res.json();
+          setTasks((prev) => {
+            if (prev.some((t) => t.id === data.id)) return prev;
+            return [...prev, data];
+          });
+          setNewTask({ title: '', description: '', due_date: '', status: 'To Do', assigned_to: '', team_id: '' });
+          setUsers([]);
+        } catch (err) {
+          setNotifications([{ id: 'error', message: 'Failed to add task' }]);
+          setTimeout(() => setNotifications([]), 3000);
+        }
+      };
+
+      const updateTask = async () => {
+        try {
+          const res = await fetch(`http://localhost:5000/api/tasks/${editTask.id}`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${localStorage.getItem('token')}`,
+            },
+            body: JSON.stringify(editTask),
+          });
+          const data = await res.json();
+          setTasks((prev) => prev.map((t) => (t.id === data.id ? data : t)));
+          setEditTask(null);
+        } catch (err) {
+          setNotifications([{ id: 'error', message: 'Failed to update task' }]);
+          setTimeout(() => setNotifications([]), 3000);
+        }
+      };
+
+      const deleteTask = async (id) => {
+        try {
+          await fetch(`http://localhost:5000/api/tasks/${id}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+          });
+          setTasks((prev) => prev.filter((t) => t.id !== id));
+        } catch (err) {
+          setNotifications([{ id: 'error', message: 'Failed to delete task' }]);
+          setTimeout(() => setNotifications([]), 3000);
+        }
+      };
+
+      const addComment = async (taskId) => {
+        try {
+          const res = await fetch('http://localhost:5000/api/comments', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${localStorage.getItem('token')}`,
+            },
+            body: JSON.stringify({ task_id: taskId, content: commentInput }),
+          });
+          const data = await res.json();
+          setComments((prev) => {
+            const taskComments = prev[taskId] || [];
+            if (taskComments.some((c) => c.id === data.id)) return prev;
+            return {
+              ...prev,
+              [taskId]: [...taskComments, data],
+            };
+          });
+          setCommentInput('');
+        } catch (err) {
+          setNotifications([{ id: 'error', message: 'Failed to add comment' }]);
+          setTimeout(() => setNotifications([]), 3000);
+        }
+      };
+
+      const onDragEnd = (result) => {
+        if (!result.destination) return;
+
+        const { source, destination } = result;
+        const updatedTasks = [...tasks];
+        const sourceTasks = updatedTasks.filter((t) => t.status === source.droppableId);
+        const [movedTask] = sourceTasks.splice(source.index, 1);
+
+        movedTask.status = destination.droppableId;
+
+        const destTasks = updatedTasks.filter((t) => t.status === destination.droppableId);
+        destTasks.splice(destination.index, 0, movedTask);
+
+        setTasks(updatedTasks.map((t) => (t.id === movedTask.id ? movedTask : t)));
+
+        fetch(`http://localhost:5000/api/tasks/${movedTask.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${localStorage.getItem('token')}`,
+          },
+          body: JSON.stringify({ ...movedTask, status: destination.droppableId }),
+        }).catch(() => {
+          setNotifications([{ id: 'error', message: 'Failed to update task status' }]);
+          setTimeout(() => setNotifications([]), 3000);
+        });
+      };
+
+      if (!user) {
+        return (
+          <div className="flex items-center justify-center h-screen bg-gradient-to-br from-blue-100 to-purple-100">
+            <div className="p-8 bg-white rounded-xl shadow-2xl w-full max-w-md transform transition-all hover:scale-105">
+              <h1 className="text-3xl font-bold mb-6 text-center text-gray-800">Login</h1>
+              <input
+                type="text"
+                placeholder="Username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="border border-gray-300 p-3 mb-4 w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="border border-gray-300 p-3 mb-4 w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <button
+                onClick={login}
+                className="bg-blue-600 text-white p-3 rounded-lg w-full hover:bg-blue-700 transition-colors duration-300"
+              >
+                Login
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen bg-gray-50">
+          <header className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 shadow-lg">
+            <div className="max-w-7xl mx-auto flex justify-between items-center">
+              <h1 className="text-2xl font-bold">TaskSync</h1>
+              <div className="flex items-center space-x-4">
+                <span className="text-sm">Welcome, {user.username}</span>
+                <button
+                  onClick={() => {
+                    localStorage.removeItem('token');
+                    setUser(null);
+                  }}
+                  className="bg-red-500 text-white px-3 py-1 rounded-lg hover:bg-red-600 transition-colors"
+                >
+                  Logout
+                </button>
+              </div>
+            </div>
+          </header>
+          <div className="max-w-7xl mx-auto p-6">
+            {notifications.map((n) => (
+              <div
+                key={n.id}
+                className="fixed top-4 right-4 bg-green-500 text-white p-3 rounded-lg shadow-lg animate-slide-in"
+              >
+                {n.message}
+              </div>
+            ))}
+            <div className="mb-6 p-6 bg-white rounded-xl shadow-md">
+              <h2 className="text-2xl font-semibold mb-4 text-gray-800">Add Task</h2>
+              <input
+                type="text"
+                placeholder="Task Title"
+                value={newTask.title}
+                onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
+                className="border border-gray-300 p-3 mb-4 w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <textarea
+                placeholder="Description"
+                value={newTask.description}
+                onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
+                className="border border-gray-300 p-3 mb-4 w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <input
+                type="date"
+                value={newTask.due_date}
+                onChange={(e) => setNewTask({ ...newTask, due_date: e.target.value })}
+                className="border border-gray-300 p-3 mb-4 w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <select
+                value={newTask.team_id}
+                onChange={(e) => {
+                  setNewTask({ ...newTask, team_id: e.target.value, assigned_to: '' });
+                  fetchUsers(e.target.value);
+                }}
+                className="border border-gray-300 p-3 mb-4 w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Select Team</option>
+                {teams.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+              <select
+                value={newTask.assigned_to}
+                onChange={(e) => setNewTask({ ...newTask, assigned_to: e.target.value })}
+                className="border border-gray-300 p-3 mb-4 w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={!newTask.team_id}
+              >
+                <option value="">Select User</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>{u.username}</option>
+                ))}
+              </select>
+              <button
+                onClick={addTask}
+                className="bg-blue-600 text-white p-3 rounded-lg w-full hover:bg-blue-700 transition-colors duration-300"
+              >
+                Add Task
+              </button>
+            </div>
+            <DragDropContext onDragEnd={onDragEnd}>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {['To Do', 'In Progress', 'Done'].map((status) => (
+                  <Droppable droppableId={status} key={status}>
+                    {(provided) => (
+                      <div
+                        ref={provided.innerRef}
+                        {...provided.droppableProps}
+                        className="bg-gray-100 p-6 rounded-xl shadow-md"
+                      >
+                        <h2 className="text-xl font-semibold mb-4 text-gray-800">{status}</h2>
+                        {tasks
+                          .filter((task) => task.status === status)
+                          .map((task, index) => (
+                            <Draggable key={task.id} draggableId={task.id} index={index}>
+                              {(provided) => (
+                                <div
+                                  ref={provided.innerRef}
+                                  {...provided.draggableProps}
+                                  {...provided.dragHandleProps}
+                                  className="bg-white p-4 mb-4 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200"
+                                >
+                                  <h3 className="font-bold text-lg text-gray-800">{task.title}</h3>
+                                  <p className="text-sm text-gray-600">{task.description}</p>
+                                  <p className="text-sm text-gray-500">Due: {task.due_date}</p>
+                                  <p className="text-sm text-gray-500">Assigned: {task.assigned_user || 'Unassigned'}</p>
+                                  <span
+                                    className={`inline-block px-2 py-1 text-xs font-semibold rounded-full ${
+                                      task.assigned_role === 'Developer'
+                                        ? 'bg-blue-100 text-blue-800'
+                                        : task.assigned_role === 'Project Manager'
+                                        ? 'bg-green-100 text-green-800'
+                                        : task.assigned_role === 'UX/UI Designer'
+                                        ? 'bg-purple-100 text-purple-800'
+                                        : 'bg-gray-100 text-gray-800'
+                                    }`}
+                                  >
+                                    {task.assigned_role || 'N/A'}
+                                  </span>
+                                  <div className="mt-3 flex justify-between">
+                                    <button
+                                      onClick={() => {
+                                        setEditTask(task);
+                                        fetchUsers(task.team_id);
+                                      }}
+                                      className="bg-yellow-500 text-white px-3 py-1 rounded-lg hover:bg-yellow-600 text-sm transition-colors"
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      onClick={() => deleteTask(task.id)}
+                                      className="bg-red-500 text-white px-3 py-1 rounded-lg hover:bg-red-600 text-sm transition-colors"
+                                    >
+                                      Delete
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setSelectedTaskId(task.id);
+                                        fetchComments(task.id);
+                                      }}
+                                      className="bg-blue-500 text-white px-3 py-1 rounded-lg hover:bg-blue-600 text-sm transition-colors"
+                                    >
+                                      Comments
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </Draggable>
+                          ))}
+                        {provided.placeholder}
+                      </div>
+                    )}
+                  </Droppable>
+                ))}
+              </div>
+            </DragDropContext>
+            {editTask && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+                <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md">
+                  <h2 className="text-2xl font-semibold mb-4 text-gray-800">Edit Task</h2>
+                  <input
+                    type="text"
+                    value={editTask.title}
+                    onChange={(e) => setEditTask({ ...editTask, title: e.target.value })}
+                    className="border border-gray-300 p-3 mb-4 w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <textarea
+                    value={editTask.description}
+                    onChange={(e) => setEditTask({ ...editTask, description: e.target.value })}
+                    className="border border-gray-300 p-3 mb-4 w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <input
+                    type="date"
+                    value={editTask.due_date}
+                    onChange={(e) => setEditTask({ ...editTask, due_date: e.target.value })}
+                    className="border border-gray-300 p-3 mb-4 w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <select
+                    value={editTask.assigned_to}
+                    onChange={(e) => setEditTask({ ...editTask, assigned_to: e.target.value })}
+                    className="border border-gray-300 p-3 mb-4 w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Select User</option>
+                    {users.map((u) => (
+                      <option key={u.id} value={u.id}>{u.username}</option>
+                    ))}
+                  </select>
+                  <div className="flex justify-end space-x-3">
+                    <button
+                      onClick={() => setEditTask(null)}
+                      className="bg-gray-500 text-white p-3 rounded-lg hover:bg-gray-600 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={updateTask}
+                      className="bg-blue-600 text-white p-3 rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                      Save
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {selectedTaskId && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+                <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md">
+                  <h2 className="text-2xl font-semibold mb-4 text-gray-800">Comments</h2>
+                  <div className="max-h-60 overflow-y-auto mb-4">
+                    {(comments[selectedTaskId] || []).map((comment) => (
+                      <div key={comment.id} className="border-b py-2">
+                        <p className="text-sm text-gray-700">{comment.content}</p>
+                        <p className="text-xs text-gray-500">By {comment.username || comment.user_id} at {comment.created_at}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <textarea
+                    value={commentInput}
+                    onChange={(e) => setCommentInput(e.target.value)}
+                    placeholder="Add a comment"
+                    className="border border-gray-300 p-3 mb-4 w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="flex justify-end space-x-3">
+                    <button
+                      onClick={() => setSelectedTaskId(null)}
+                      className="bg-gray-500 text-white p-3 rounded-lg hover:bg-gray-600 transition-colors"
+                    >
+                      Close
+                    </button>
+                    <button
+                      onClick={() => addComment(selectedTaskId)}
+                      className="bg-blue-600 text-white p-3 rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                      Post
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+  <style>
+    .animate-slide-in {
+      animation: slideIn 0.5s ease-out forwards, fadeOut 3s forwards;
+    }
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes fadeOut {
+      0% { opacity: 1; }
+      80% { opacity: 1; }
+      100% { opacity: 0; }
+    }
+  </style>
+</body>
+</html>
